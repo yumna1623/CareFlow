@@ -1,63 +1,153 @@
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import axios from "axios";
-import { Link } from "react-router-dom";
-
-const API = "http://localhost:5000/api";
 
 export default function PatientBooking() {
   const [doctors, setDoctors] = useState([]);
-  const [formData, setFormData] = useState({ name: "", age: "", doctor_id: "" });
-  const [ticket, setTicket] = useState(null);
+  const [form, setForm] = useState({
+    name: "",
+    age: "",
+    email: "",
+    phone: "",
+    doctor_id: "",
+    date: "",
+    slot_id: ""
+  });
+  const [slots, setSlots] = useState([]);
 
+  // Load all doctors
   useEffect(() => {
-    axios.get(`${API}/doctors`).then(res => setDoctors(res.data));
+    axios.get("http://localhost:5000/api/doctors").then((res) => {
+      setDoctors(res.data);
+    });
   }, []);
 
-  const handleBook = async (e) => {
-    e.preventDefault();
-    if (!formData.doctor_id) return alert("Select a doctor");
-    
-    try {
-        const res = await axios.post(`${API}/book`, {
-            doctor_id: formData.doctor_id,
-            patient_name: formData.name,
-            patient_age: formData.age
-        });
-        setTicket(res.data);
-    } catch (error) {
-        console.error("Booking Error:", error);
-        alert("Failed to book appointment.");
-    }
+  // Generate & fetch slots
+  const fetchSlots = async (doctor_id, date) => {
+    if (!doctor_id || !date) return;
+
+    // Generate slots if not present
+    await axios.post("http://localhost:5000/api/doctor/generate-slots", {
+      doctor_id,
+      date
+    });
+
+    // Fetch available slots
+    const res = await axios.get(
+      `http://localhost:5000/api/doctor/${doctor_id}/timeslots/${date}`
+    );
+    setSlots(res.data);
+  };
+
+  const submitBooking = async () => {
+    if (!form.slot_id) return alert("Please select a time slot!");
+
+    const res = await axios.post("http://localhost:5000/api/book/slot", {
+      doctor_id: form.doctor_id,
+      slot_id: form.slot_id,
+      patient_name: form.name,
+      patient_age: form.age,
+      patient_email: form.email,
+      patient_phone: form.phone
+    });
+
+    alert(
+      `Appointment Booked!\nAppointment ID: ${res.data.appointment_id}\nTime: ${res.data.appointment_time}`
+    );
+
+    // Reset form
+    setForm({ ...form, slot_id: "" });
+    setSlots([]);
   };
 
   return (
-    <div className="min-h-screen bg-blue-50 p-8 flex flex-col items-center">
-      <h2 className="text-3xl font-bold text-blue-800 mb-6">Book Appointment</h2>
-      
-      {!ticket ? (
-        <form onSubmit={handleBook} className="bg-white p-6 rounded shadow-lg w-full max-w-md">
-          <div className="mb-4">
-            <label className="block text-gray-700">Select Doctor</label>
-            <select className="w-full border p-2 rounded" onChange={e => setFormData({...formData, doctor_id: e.target.value})} defaultValue="">
-              <option value="" disabled>-- Choose --</option>
-              {doctors.map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.name} ({d.specialization})</option>)}
-            </select>
-          </div>
-          <input className="w-full border p-2 mb-4 rounded" placeholder="Patient Name" required onChange={e => setFormData({...formData, name: e.target.value})} />
-          <input className="w-full border p-2 mb-4 rounded" placeholder="Age" type="number" required onChange={e => setFormData({...formData, age: e.target.value})} />
-          <button className="w-full bg-blue-600 text-white p-3 rounded font-bold hover:bg-blue-700">Book Now</button>
-        </form>
-      ) : (
-        <div className="bg-green-100 p-8 rounded border-2 border-green-500 text-center">
-          <h3 className="text-2xl font-bold text-green-700">Booking Confirmed!</h3>
-          <p className="mt-4 text-xl">Your Tracking ID: <span className="font-mono font-bold text-3xl block mt-2">{ticket.appointment_id}</span></p>
-          <p className="text-sm text-gray-600 mt-2">Save this ID to track your queue status.</p>
-          <div className="mt-6 flex gap-4 justify-center">
-            <Link to="/track" className="bg-blue-600 text-white px-4 py-2 rounded">Track Now</Link>
-            <button onClick={() => setTicket(null)} className="bg-gray-500 text-white px-4 py-2 rounded">Book Another</button>
+    <div className="p-8 max-w-xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6">Book Appointment</h1>
+
+      <input
+        className="border p-3 w-full mb-4"
+        placeholder="Patient Name"
+        value={form.name}
+        onChange={(e) => setForm({ ...form, name: e.target.value })}
+      />
+
+      <input
+        className="border p-3 w-full mb-4"
+        placeholder="Age"
+        type="number"
+        value={form.age}
+        onChange={(e) => setForm({ ...form, age: e.target.value })}
+      />
+
+      {/* Email */}
+      <input
+        className="border p-3 w-full mb-4"
+        placeholder="Email"
+        value={form.email}
+        onChange={(e) => setForm({ ...form, email: e.target.value })}
+      />
+
+      {/* Phone */}
+      <input
+        className="border p-3 w-full mb-4"
+        placeholder="Phone"
+        value={form.phone}
+        onChange={(e) => setForm({ ...form, phone: e.target.value })}
+      />
+
+      <select
+        className="border p-3 w-full mb-4"
+        value={form.doctor_id}
+        onChange={(e) => {
+          setForm({ ...form, doctor_id: e.target.value, slot_id: "" });
+          fetchSlots(e.target.value, form.date);
+        }}
+      >
+        <option value="">Select Doctor</option>
+        {doctors.map((d) => (
+          <option key={d.doctor_id} value={d.doctor_id}>
+            {d.name} — {d.specialization}
+          </option>
+        ))}
+      </select>
+
+      <input
+        type="date"
+        className="border p-3 w-full mb-4"
+        min={new Date().toISOString().split("T")[0]}
+        value={form.date}
+        onChange={(e) => {
+          setForm({ ...form, date: e.target.value, slot_id: "" });
+          fetchSlots(form.doctor_id, e.target.value);
+        }}
+      />
+
+      {slots.length > 0 && (
+        <div className="mt-4">
+          <h2 className="font-bold mb-2">Available Time Slots</h2>
+          <div className="grid grid-cols-2 gap-2">
+            {slots.map((slot) => (
+              <button
+                key={slot.id}
+                onClick={() => setForm({ ...form, slot_id: slot.id })}
+                className={`p-2 border rounded ${
+                  form.slot_id === slot.id
+                    ? "bg-blue-600 text-white"
+                    : "bg-white"
+                }`}
+              >
+                {slot.display_time || slot.time} ({slot.date})
+              </button>
+            ))}
           </div>
         </div>
       )}
+
+      <button
+        onClick={submitBooking}
+        className="bg-blue-600 mt-6 p-3 rounded text-white w-full"
+      >
+        Confirm Booking
+      </button>
     </div>
   );
 }
