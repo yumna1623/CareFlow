@@ -4,21 +4,16 @@ import pool from "../db.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
-
 const router = express.Router();
-const JWT_SECRET = "your_jwt_secret_here"; 
+const JWT_SECRET = "your_jwt_secret_here";
 
-// -----------------------------
-// Helpers
-// -----------------------------
+// Helper Functions
 function generateAppointmentId() {
   return `APT${Date.now()}${Math.floor(Math.random() * 900 + 100)}`;
 }
 
-// convert "9:00 AM" -> minutes integer
 function convertToMinutes(time) {
   if (!time) return 0;
-  // Accept both "09:00", "9:00 AM", "09:00 AM", "09:00:00"
   if (time.includes("AM") || time.includes("PM")) {
     const [hhmm, ampm] = time.split(" ");
     let [h, m] = hhmm.split(":").map(Number);
@@ -26,13 +21,11 @@ function convertToMinutes(time) {
     if (ampm === "AM" && h === 12) h = 0;
     return h * 60 + m;
   } else {
-    // 24h format "09:00" or "09:00:00"
     const [h, m] = time.split(":").map(Number);
     return h * 60 + (m || 0);
   }
 }
 
-// convert minutes -> "HH:MM:SS" (24h DB time) and also return display string "h:mm AM/PM"
 function minutesToTimeFormats(total) {
   let h = Math.floor(total / 60);
   let m = total % 60;
@@ -44,9 +37,19 @@ function minutesToTimeFormats(total) {
   return { dbTime, display };
 }
 
-// -----------------------------
-// 1. DOCTOR REGISTRATION (self-register)
-// -----------------------------
+function formatDateString(dateInput) {
+  if (!dateInput) return null;
+  if (typeof dateInput === 'string') {
+    return dateInput.split('T')[0];
+  }
+  const d = new Date(dateInput);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// ===== DOCTOR REGISTRATION =====
 router.post("/doctor/register", async (req, res) => {
   const { name, specialization, email, password, start_time, end_time, slot_duration } = req.body;
 
@@ -75,8 +78,7 @@ router.post("/doctor/register", async (req, res) => {
   }
 });
 
-
-
+// ===== DOCTOR LOGIN =====
 router.post("/doctor/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -90,7 +92,6 @@ router.post("/doctor/login", async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: "Invalid password" });
 
-    // generate JWT token
     const token = jwt.sign({ doctor_id: user.id, name: user.full_name }, JWT_SECRET, { expiresIn: "1d" });
 
     res.json({ token, user: { doctor_id: user.id, name: user.full_name } });
@@ -99,9 +100,7 @@ router.post("/doctor/login", async (req, res) => {
   }
 });
 
-// -----------------------------
-// GET DOCTORS (for patient dropdown)
-// -----------------------------
+// ===== GET DOCTORS =====
 router.get("/doctors", async (req, res) => {
   try {
     const result = await pool.query(
@@ -115,18 +114,17 @@ router.get("/doctors", async (req, res) => {
   }
 });
 
-// -----------------------------
-// GENERATE SLOTS (idempotent for date)
-// -----------------------------
+// ===== GENERATE SLOTS =====
 router.post("/doctor/generate-slots", async (req, res) => {
   const { doctor_id, date } = req.body;
   if (!doctor_id || !date) return res.status(400).json({ error: "doctor_id and date required" });
+
+  const formattedDate = formatDateString(date);
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Check doctor
     const docRes = await client.query(
       "SELECT start_time, end_time, slot_duration FROM doctors WHERE id=$1",
       [doctor_id]
@@ -137,24 +135,22 @@ router.post("/doctor/generate-slots", async (req, res) => {
     }
     const { start_time, end_time, slot_duration } = docRes.rows[0];
 
-    // ensure we don't double-generate
-    const check = await client.query("SELECT COUNT(*) FROM time_slots WHERE doctor_id=$1 AND date=$2", [doctor_id, date]);
+    const check = await client.query("SELECT COUNT(*) FROM time_slots WHERE doctor_id=$1 AND date=$2", [doctor_id, formattedDate]);
     if (parseInt(check.rows[0].count) > 0) {
       await client.query("COMMIT");
       return res.json({ message: "Slots already generated" });
     }
 
-    const start = convertToMinutes(start_time || "09:00");
-    const end = convertToMinutes(end_time || "17:00");
+    const start = convertToMinutes(start_time || "09:00 AM");
+    const end = convertToMinutes(end_time || "05:00 PM");
     const dur = parseInt(slot_duration) || 15;
 
     for (let t = start; t < end; t += dur) {
       const { dbTime } = minutesToTimeFormats(t);
-      // INSERT; UNIQUE constraint on (doctor_id,date,time) prevents duplicates.
       await client.query(
         `INSERT INTO time_slots (doctor_id, date, time, is_booked)
          VALUES ($1, $2, $3, false)`,
-        [doctor_id, date, dbTime]
+        [doctor_id, formattedDate, dbTime]
       );
     }
 
@@ -162,46 +158,45 @@ router.post("/doctor/generate-slots", async (req, res) => {
     res.json({ success: true, message: "Slots generated" });
   } catch (err) {
     await client.query("ROLLBACK");
-    // possible unique violation from concurrency; ignore as idempotent
     if (err.code === "23505") {
-      res.json({ message: "Some slots already existed; generation skipped where duplicates occurred." });
+      res.json({ message: "Some slots already existed" });
     } else res.status(500).json({ error: err.message });
   } finally {
     client.release();
   }
 });
 
-// -----------------------------
-// GET AVAILABLE TIME SLOTS (for date)
-// -----------------------------
+// ===== GET AVAILABLE TIME SLOTS =====
 router.get("/doctor/:doctor_id/timeslots/:date", async (req, res) => {
   const { doctor_id, date } = req.params;
+  const formattedDate = formatDateString(date);
+
   try {
     const slots = await pool.query(
       `SELECT id, time::text AS time_24, to_char(time, 'HH12:MI AM') AS display_time, date
        FROM time_slots
        WHERE doctor_id=$1 AND date=$2 AND is_booked=false
        ORDER BY time ASC`,
-      [doctor_id, date]
+      [doctor_id, formattedDate]
     );
-    res.json(slots.rows.map(s => ({ id: s.id, time: s.time_24, display_time: s.display_time, date: s.date })));
+    res.json(slots.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// -----------------------------
-// BOOK APPOINTMENT BY SLOT (atomic)
-// -----------------------------
+// ===== BOOK APPOINTMENT BY SLOT =====
 router.post("/book/slot", async (req, res) => {
   const { doctor_id, slot_id, patient_name, patient_email, patient_phone, patient_age } = req.body;
-  if (!doctor_id || !slot_id || !patient_name) return res.status(400).json({ error: "doctor_id, slot_id and patient_name required" });
+  
+  if (!doctor_id || !slot_id || !patient_name) {
+    return res.status(400).json({ error: "doctor_id, slot_id and patient_name required" });
+  }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // 1) Lock & mark slot as booked atomically
     const slotRes = await client.query(
       `UPDATE time_slots
        SET is_booked = true
@@ -214,23 +209,24 @@ router.post("/book/slot", async (req, res) => {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Slot already booked or not found" });
     }
+    
     const slot = slotRes.rows[0];
+    const cleanDate = formatDateString(slot.appointment_date);
 
-    // 2) Ensure patient exists (create if not)
     let patientId;
     if (patient_email) {
       const p = await client.query("SELECT id FROM patients WHERE email=$1", [patient_email]);
-      if (p.rows.length > 0) patientId = p.rows[0].id;
-      else {
+      if (p.rows.length > 0) {
+        patientId = p.rows[0].id;
+      } else {
         const ins = await client.query(
           `INSERT INTO patients (full_name, email, phone, created_at)
            VALUES ($1,$2,$3,NOW()) RETURNING id`,
-          [patient_name, patient_email || null, patient_phone || null]
+          [patient_name, patient_email, patient_phone || null]
         );
         patientId = ins.rows[0].id;
       }
     } else {
-      // no email supplied: create patient row without email
       const ins = await client.query(
         `INSERT INTO patients (full_name, email, phone, created_at)
          VALUES ($1,$2,$3,NOW()) RETURNING id`,
@@ -239,41 +235,37 @@ router.post("/book/slot", async (req, res) => {
       patientId = ins.rows[0].id;
     }
 
-    // 3) Calculate next queue number for that doctor and date
     const q = await client.query(
       `SELECT COALESCE(MAX(queue_number),0) + 1 AS next
        FROM appointments
-       WHERE doctor_id=$1 AND appointment_date=$2`,
-      [doctor_id, slot.appointment_date]
+       WHERE doctor_id=$1 AND appointment_date=$2::DATE`,
+      [doctor_id, cleanDate]
     );
     const queue_number = q.rows[0].next;
 
-    // 4) Insert appointment; generate appointment_id
-    // 4) Insert appointment; generate appointment_id
-const appointment_id = generateAppointmentId();
-const insert = await client.query(
-  `INSERT INTO appointments
-   (appointment_id, doctor_id, patient_id, slot_id, queue_number, status, created_at, patient_name, patient_email, patient_phone, appointment_date, appointment_time)
-   VALUES ($1,$2,$3,$4,$5,'scheduled',NOW(),$6,$7,$8,$9,$10)
-   RETURNING appointment_id, queue_number, appointment_time, appointment_date`,
-  [
-    appointment_id,
-    doctor_id,
-    patientId,
-    slot_id,
-    queue_number,
-    patient_name,
-    patient_email || null,
-    patient_phone || null,
-    new Date(slot.appointment_date), // <-- force DATE object
-    slot.appointment_time
-  ]
-);
-
+    const appointment_id = generateAppointmentId();
+    const insert = await client.query(
+      `INSERT INTO appointments
+       (appointment_id, doctor_id, patient_id, slot_id, queue_number, status, created_at, patient_name, patient_email, patient_phone, patient_age, appointment_date, appointment_time)
+       VALUES ($1,$2,$3,$4,$5,'scheduled',NOW(),$6,$7,$8,$9,$10::DATE,$11)
+       RETURNING appointment_id, queue_number, appointment_time, appointment_date`,
+      [
+        appointment_id,
+        doctor_id,
+        patientId,
+        slot_id,
+        queue_number,
+        patient_name,
+        patient_email || null,
+        patient_phone || null,
+        patient_age || null,
+        cleanDate,
+        slot.appointment_time
+      ]
+    );
 
     await client.query("COMMIT");
 
-    // format appointment_time for frontend (HH12:MI AM)
     const a = insert.rows[0];
     const apptTimeRes = await pool.query("SELECT to_char($1::time, 'HH12:MI AM') AS display_time", [a.appointment_time]);
     const display_time = apptTimeRes.rows[0].display_time;
@@ -286,95 +278,116 @@ const insert = await client.query(
     });
   } catch (err) {
     await client.query("ROLLBACK");
+    console.error("Booking error:", err);
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
   }
 });
 
-// -----------------------------
-// TRACK APPOINTMENT
-// -----------------------------
+// ===== TRACK APPOINTMENT =====
 router.get("/track/:appointment_id", async (req, res) => {
   const { appointment_id } = req.params;
   try {
     const ap = await pool.query(
       `SELECT a.appointment_id, a.patient_name, a.patient_age, a.patient_email, a.patient_phone,
               a.queue_number, a.status, a.appointment_date, to_char(a.appointment_time, 'HH12:MI AM') AS slot_time,
-              -- compute number ahead
               (SELECT COUNT(*) FROM appointments a2
                WHERE a2.doctor_id = a.doctor_id AND a2.appointment_date = a.appointment_date AND a2.status='scheduled' AND a2.queue_number < a.queue_number) AS patients_ahead
        FROM appointments a
        WHERE a.appointment_id = $1`,
       [appointment_id]
     );
+    
     if (ap.rows.length === 0) return res.status(404).json({ error: "Appointment not found" });
+    
     const row = ap.rows[0];
-    // compute estimated delay (simple heuristic: patients_ahead * avg consult time)
-    // Try to read doctor's slot_duration
-    const doc = await pool.query("SELECT slot_duration FROM doctors WHERE id = (SELECT doctor_id FROM appointments WHERE appointment_id=$1)", [appointment_id]);
+    const doc = await pool.query(
+      "SELECT slot_duration FROM doctors WHERE id = (SELECT doctor_id FROM appointments WHERE appointment_id=$1)",
+      [appointment_id]
+    );
+    
     const avg = doc.rows[0]?.slot_duration || 15;
     const delay_mins = row.patients_ahead * avg;
-    // compute expected_time (naive): take slot_time and add delay
-    // For simplicity, return slot_time and delay_mins
+
     res.json({
       appointment_id: row.appointment_id,
       patient_name: row.patient_name,
+      patient_age: row.patient_age,
       status: row.status,
       slot_time: row.slot_time,
+      appointment_date: row.appointment_date,
+      queue_number: row.queue_number,           // ✅ ADD THIS
       patients_ahead: parseInt(row.patients_ahead, 10),
       delay_mins,
-      expected_time: row.slot_time // frontend can add delay_mins to this if needed
+      expected_time: row.slot_time
     });
   } catch (err) {
+    console.error("Track error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-
-// -----------------------------
-// DOCTOR: GET APPOINTMENTS (for dashboard) - FIXED
-// -----------------------------
+// ===== GET DOCTOR APPOINTMENTS - FIXED WITH DEBUG =====
 router.get("/doctor/appointments/:doctor_id", async (req, res) => {
   const { doctor_id } = req.params;
-  // Use the 'target_date' query parameter, or default to 'CURRENT_DATE' (PostgreSQL function)
-  const targetDate = req.query.target_date || 'CURRENT_DATE'; 
+  const targetDate = req.query.target_date;
+
+  console.log("📋 FETCHING APPOINTMENTS FOR DOCTOR:", {
+    doctor_id,
+    targetDate,
+    timestamp: new Date().toISOString()
+  });
 
   try {
-    // 1) Fetch doctor info
+    // 1) Check if doctor exists
     const doc = await pool.query(
       `SELECT id AS doctor_id, full_name AS name, start_time, end_time, slot_duration 
        FROM doctors 
        WHERE id=$1`,
       [doctor_id]
     );
-    if (doc.rows.length === 0) return res.status(404).json({ error: "Doctor not found" });
-
-    // 2) Fetch appointments for the specified targetDate
-    // We use dynamic query construction to handle 'CURRENT_DATE' function or a passed string date.
-    let appts;
-    if (targetDate === 'CURRENT_DATE') {
-        appts = await pool.query(
-            `SELECT a.appointment_id, a.patient_name, a.patient_age, a.status, a.queue_number,
-                    to_char(a.appointment_time, 'HH12:MI AM') AS slot_time, a.appointment_date
-             FROM appointments a
-             WHERE a.doctor_id=$1
-               AND a.appointment_date = CURRENT_DATE
-             ORDER BY a.queue_number ASC`,
-            [doctor_id]
-        );
-    } else {
-        appts = await pool.query(
-            `SELECT a.appointment_id, a.patient_name, a.patient_age, a.status, a.queue_number,
-                    to_char(a.appointment_time, 'HH12:MI AM') AS slot_time, a.appointment_date
-             FROM appointments a
-             WHERE a.doctor_id=$1
-               AND a.appointment_date = $2
-             ORDER BY a.queue_number ASC`,
-            [doctor_id, targetDate]
-        );
-    }
     
+    if (doc.rows.length === 0) {
+      console.error("❌ Doctor not found:", doctor_id);
+      return res.status(404).json({ error: "Doctor not found" });
+    }
+
+    console.log("✅ Doctor found:", doc.rows[0]);
+
+    let appts;
+    let queryDate;
+
+    if (targetDate) {
+      queryDate = formatDateString(targetDate);
+      console.log("🔍 Querying for specific date:", queryDate);
+
+      appts = await pool.query(
+        `SELECT a.appointment_id, a.patient_name, a.patient_age, a.status, a.queue_number,
+                to_char(a.appointment_time, 'HH12:MI AM') AS slot_time, a.appointment_date
+         FROM appointments a
+         WHERE a.doctor_id=$1
+           AND a.appointment_date=$2::DATE
+         ORDER BY a.queue_number ASC`,
+        [doctor_id, queryDate]
+      );
+    } else {
+      console.log("🔍 Querying for TODAY");
+
+      appts = await pool.query(
+        `SELECT a.appointment_id, a.patient_name, a.patient_age, a.status, a.queue_number,
+                to_char(a.appointment_time, 'HH12:MI AM') AS slot_time, a.appointment_date
+         FROM appointments a
+         WHERE a.doctor_id=$1
+           AND a.appointment_date=CURRENT_DATE
+         ORDER BY a.queue_number ASC`,
+        [doctor_id]
+      );
+    }
+
+    console.log(`✅ Found ${appts.rows.length} appointments`);
+    console.log("📊 Appointments data:", appts.rows);
+
     const scheduled = appts.rows.filter(a => a.status === 'scheduled');
     const nowServing = scheduled[0] || null;
     const waitingList = scheduled.slice(1);
@@ -384,20 +397,16 @@ router.get("/doctor/appointments/:doctor_id", async (req, res) => {
       nowServing,
       waitingList,
       allAppointments: appts.rows,
-      // Provide the date back for reference, especially if it was CURRENT_DATE
-      targetDate: targetDate === 'CURRENT_DATE' ? new Date().toISOString().split('T')[0] : targetDate
+      targetDate: queryDate || new Date().toISOString().split('T')[0]
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ ERROR IN /doctor/appointments:", err);
+    console.error("Stack:", err.stack);
+    res.status(500).json({ error: err.message, details: err.stack });
   }
 });
 
-
-
-// -----------------------------
-// MARK APPOINTMENT COMPLETE
-// -----------------------------
+// ===== MARK APPOINTMENT COMPLETE =====
 router.put("/complete/:appointment_id", async (req, res) => {
   const { appointment_id } = req.params;
   try {
@@ -409,8 +418,7 @@ router.put("/complete/:appointment_id", async (req, res) => {
   }
 });
 
-
-// GET logged-in doctor info
+// ===== GET LOGGED-IN DOCTOR INFO =====
 router.get("/doctor/me", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: "Missing token" });
@@ -431,7 +439,5 @@ router.get("/doctor/me", async (req, res) => {
     res.status(401).json({ error: "Invalid token" });
   }
 });
-
-
 
 export default router;
