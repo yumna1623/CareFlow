@@ -3,6 +3,7 @@ import express from "express";
 import pool from "../db.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import {authmiddleware} from "../middleware/authmiddleware.js"
 
 const router = express.Router();
 const JWT_SECRET = "your_jwt_secret_here";
@@ -288,28 +289,50 @@ router.post("/book/slot", async (req, res) => {
 // ===== TRACK APPOINTMENT =====
 router.get("/track/:appointment_id", async (req, res) => {
   const { appointment_id } = req.params;
-  try {
-    const ap = await pool.query(
-      `SELECT a.appointment_id, a.patient_name, a.patient_age, a.patient_email, a.patient_phone,
-              a.queue_number, a.status, a.appointment_date, to_char(a.appointment_time, 'HH12:MI AM') AS slot_time,
-              (SELECT COUNT(*) FROM appointments a2
-               WHERE a2.doctor_id = a.doctor_id AND a2.appointment_date = a.appointment_date AND a2.status='scheduled' AND a2.queue_number < a.queue_number) AS patients_ahead
-       FROM appointments a
-       WHERE a.appointment_id = $1`,
-      [appointment_id]
-    );
-    
-    if (ap.rows.length === 0) return res.status(404).json({ error: "Appointment not found" });
-    
-    const row = ap.rows[0];
-    const doc = await pool.query(
-      "SELECT slot_duration FROM doctors WHERE id = (SELECT doctor_id FROM appointments WHERE appointment_id=$1)",
-      [appointment_id]
-    );
-    
-    const avg = doc.rows[0]?.slot_duration || 15;
-    const delay_mins = row.patients_ahead * avg;
 
+  try {
+    // 1. Get the appointment record
+    const ap = await pool.query(
+      `SELECT appointment_id, doctor_id, patient_name, patient_age, patient_email, 
+              patient_phone, status, appointment_date, 
+              to_char(appointment_time, 'HH12:MI AM') AS slot_time,
+              appointment_time
+       FROM appointments
+       WHERE appointment_id = $1`,
+      [appointment_id]
+    );
+
+    if (ap.rows.length === 0)
+      return res.status(404).json({ error: "Appointment not found" });
+
+    const row = ap.rows[0];
+
+    // 2. Fetch ALL appointments for same doctor & date, sorted by REAL time
+    const all = await pool.query(
+      `SELECT appointment_id, appointment_time
+       FROM appointments
+       WHERE doctor_id = $1 AND appointment_date = $2 AND status='scheduled'
+       ORDER BY appointment_time ASC`,
+      [row.doctor_id, row.appointment_date]
+    );
+
+    // 3. Compute queue position based on time
+    const position = all.rows.findIndex(
+      (x) => x.appointment_id === appointment_id
+    );
+
+    const patients_ahead = position === -1 ? 0 : position;
+
+    // 4. Doctor average slot duration
+    const doc = await pool.query(
+      "SELECT slot_duration FROM doctors WHERE id = $1",
+      [row.doctor_id]
+    );
+
+    const avg = doc.rows[0]?.slot_duration || 15;
+    const delay_mins = patients_ahead * avg;
+
+    // 5. Final response
     res.json({
       appointment_id: row.appointment_id,
       patient_name: row.patient_name,
@@ -317,8 +340,8 @@ router.get("/track/:appointment_id", async (req, res) => {
       status: row.status,
       slot_time: row.slot_time,
       appointment_date: row.appointment_date,
-      queue_number: row.queue_number,           // ✅ ADD THIS
-      patients_ahead: parseInt(row.patients_ahead, 10),
+      queue_number: position + 1,
+      patients_ahead,
       delay_mins,
       expected_time: row.slot_time
     });
@@ -327,6 +350,7 @@ router.get("/track/:appointment_id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ===== GET DOCTOR APPOINTMENTS - FIXED WITH DEBUG =====
 router.get("/doctor/appointments/:doctor_id", async (req, res) => {
@@ -439,5 +463,83 @@ router.get("/doctor/me", async (req, res) => {
     res.status(401).json({ error: "Invalid token" });
   }
 });
+
+router.delete("/doctor/me", authmiddleware, async (req, res) => {
+  const doctorId = req.user.doctor_id;
+
+  console.log("🗑 Deleting doctor:", doctorId);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Step 1: Delete appointments
+    const delAppts = await client.query(
+      "DELETE FROM appointments WHERE doctor_id=$1",
+      [doctorId]
+    );
+    console.log("🗑 Deleted appointments:", delAppts.rowCount);
+
+    // Step 2: Delete time slots
+    const delSlots = await client.query(
+      "DELETE FROM time_slots WHERE doctor_id=$1",
+      [doctorId]
+    );
+    console.log("🗑 Deleted slots:", delSlots.rowCount);
+
+    // Step 3: Delete doctor
+    const delDoc = await client.query(
+      "DELETE FROM doctors WHERE id=$1 RETURNING *",
+      [doctorId]
+    );
+    console.log("🗑 Deleted doctor:", delDoc.rowCount);
+
+    if (delDoc.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Doctor not found" });
+    }
+
+    await client.query("COMMIT");
+
+    res.json({ message: "Doctor account deleted successfully" });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Delete error:", err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+
+// ===== DELETE APPOINTMENT =====
+router.delete("/appointment/:appointment_id", async (req, res) => {
+  const { appointment_id } = req.params;
+
+  try {
+    // Delete appointment first
+    const result = await pool.query(
+      "DELETE FROM appointments WHERE appointment_id = $1 RETURNING *",
+      [appointment_id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+
+    // Also free the time slot
+    await pool.query(
+      "UPDATE time_slots SET is_booked = false WHERE id = $1",
+      [result.rows[0].slot_id]
+    );
+
+    res.json({ message: "Appointment deleted successfully" });
+  } catch (err) {
+    console.error("❌ Delete appointment error:", err);
+    res.status(500).json({ error: "Server error while deleting appointment" });
+  }
+});
+
 
 export default router;
