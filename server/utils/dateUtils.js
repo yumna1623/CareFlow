@@ -38,8 +38,3 @@ export function formatDateString(inputDate) {
 
   return `${year}-${month}-${day}`;
 }
-
-
-
-
-
