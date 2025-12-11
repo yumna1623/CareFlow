@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
@@ -66,6 +65,11 @@ function DoctorLoginRegister({ setAuth, setUserType }) {
     setLoading(true);
     try {
       if (!isLogin) {
+        if (formData.secret_key !== "1994") {
+    alert("❌ Invalid secret key! Please contact management.");
+    setLoading(false);
+    return;
+        }
         const data = {
           ...formData,
           start_time: formData.start_time || "09:00 AM",
@@ -186,6 +190,20 @@ function DoctorLoginRegister({ setAuth, setUserType }) {
                       required
                     />
                   </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-600 mb-2">
+                    Secret Key
+                  </label>
+                  <input
+                    type="password"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500 focus:outline-none"
+                    placeholder="Enter management secret key"
+                    onChange={(e) =>
+                      setFormData({ ...formData, secret_key: e.target.value })
+                    }
+                    required
+                  />
                 </div>
 
                 <div>
@@ -370,40 +388,45 @@ function DoctorDashboard({ auth, setAuth }) {
         </div>
 
         {/* Sidebar Buttons */}
-<div className="space-y-3 mt-6">
-    {/* Sign Out Button */}
-    <button
-        onClick={() => {
-            localStorage.removeItem('docToken');
-            setAuth(null);
-        }}
-        className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-lg bg-white text-blue-700 font-semibold shadow-md hover:bg-blue-50 hover:shadow-lg transition"
-    >
-        <Icon name="logout" className="w-5 h-5" />
-        Sign Out
-    </button>
+        <div className="space-y-3 mt-6">
+          {/* Sign Out Button */}
+          <button
+            onClick={() => {
+              localStorage.removeItem("docToken");
+              setAuth(null);
+            }}
+            className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-lg bg-white text-blue-700 font-semibold shadow-md hover:bg-blue-50 hover:shadow-lg transition"
+          >
+            <Icon name="logout" className="w-5 h-5" />
+            Sign Out
+          </button>
 
-    {/* Delete Account Button */}
-    <button
-        onClick={async () => {
-            if (!window.confirm("Are you sure? This will delete your account!")) return;
-            const token = localStorage.getItem("docToken");
-            try {
-                await axios.delete(`${API}/doctor/me`, { headers: { Authorization: `Bearer ${token}` } });
+          {/* Delete Account Button */}
+          <button
+            onClick={async () => {
+              if (
+                !window.confirm("Are you sure? This will delete your account!")
+              )
+                return;
+              const token = localStorage.getItem("docToken");
+              try {
+                await axios.delete(`${API}/doctor/me`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
                 localStorage.removeItem("docToken");
                 setAuth(null);
                 alert("Account deleted successfully.");
-            } catch (err) {
+              } catch (err) {
                 alert("Error deleting account: " + err.response?.data?.error);
-            }
-        }}
-        className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-lg bg-red-600 text-white font-semibold shadow-md hover:bg-red-700 hover:shadow-lg transition"
-    >
-        <Icon name="user" className="w-5 h-5" /> {/* or choose a trash/delete icon if you prefer */}
-        Delete Account
-    </button>
-</div>
-
+              }
+            }}
+            className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-lg bg-red-600 text-white font-semibold shadow-md hover:bg-red-700 hover:shadow-lg transition"
+          >
+            <Icon name="user" className="w-5 h-5" />{" "}
+            {/* or choose a trash/delete icon if you prefer */}
+            Delete Account
+          </button>
+        </div>
       </div>
 
       {/* Main Content */}
