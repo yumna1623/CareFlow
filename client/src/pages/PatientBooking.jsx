@@ -327,51 +327,87 @@ export default function PatientBooking() {
           />
         )}
 
-      {view === "doctors" && (
-  <div className="bg-white p-8 rounded-2xl shadow-2xl border border-gray-200 max-w-4xl mx-auto">
+     {view === "doctors" && (
+  <div className="bg-white p-8 rounded-3xl shadow-2xl border border-gray-100 max-w-5xl mx-auto font-sans">
+    {/* Back Button - Refined look */}
     <button
       onClick={() => setView("booking")}
-      className="mb-6 px-4 py-2 rounded-full bg-blue-600 text-white font-medium hover:bg-blue-700 transition"
+      className="mb-8 flex items-center gap-2 text-blue-600 hover:text-blue-700 transition font-semibold text-sm focus:outline-none"
     >
-      ← Back to Booking
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+      </svg>
+      Back to Booking
     </button>
 
-    <h2 className="text-3xl font-bold mb-6 text-gray-800 flex items-center gap-2">
-      👥 Doctors List
+    {/* Header */}
+    <h2 className="text-4xl font-extrabold mb-8 text-gray-900 border-b pb-4">
+      Find Your Specialist
     </h2>
 
-    {/* Filter Section */}
-    <div className="mb-6 flex flex-wrap items-center gap-4">
-      <label className="text-gray-700 font-medium">Filter by Specialization:</label>
-      <select
-        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-        onChange={(e) => setFilter(e.target.value)}
-      >
-        <option value="">All</option>
-        {Array.from(new Set(doctors.map((d) => d.specialization))).map((spec) => (
-          <option key={spec} value={spec}>{spec}</option>
-        ))}
-      </select>
+    {/* Filter Section - Cleaned up and aligned */}
+    <div className="mb-10 flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200">
+      <label htmlFor="specialization-filter" className="text-gray-700 font-semibold text-base whitespace-nowrap">
+        Filter by Specialization:
+      </label>
+      <div className="relative w-full sm:w-auto">
+        <select
+          id="specialization-filter"
+          className="appearance-none border border-gray-300 rounded-xl w-full sm:w-64 pr-10 pl-4 py-2 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+          onChange={(e) => setFilter(e.target.value)}
+        >
+          <option value="">All Specializations</option>
+          {Array.from(new Set(doctors.map((d) => d.specialization))).map((spec) => (
+            <option key={spec} value={spec}>{spec}</option>
+          ))}
+        </select>
+        {/* Custom dropdown arrow */}
+        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
+          </svg>
+        </div>
+      </div>
     </div>
 
-    {/* Doctors List */}
-    <div className="grid md:grid-cols-2 gap-6">
+    {/* Doctors List - Grid with better cards */}
+    <div className="grid lg:grid-cols-3 md:grid-cols-2 gap-8">
       {doctors
         .filter((doc) => !filter || doc.specialization === filter)
         .map((doc) => (
           <div
             key={doc.doctor_id}
-            className="p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-lg transition duration-300"
+            className="p-6 border border-gray-200 rounded-2xl shadow-lg hover:shadow-xl transition duration-300 transform hover:-translate-y-0.5 bg-white flex flex-col"
           >
-            <p className="font-bold text-xl text-gray-800">Dr. {doc.name}</p>
-            <p className="text-gray-600 mt-1">{doc.specialization}</p>
-            <p className="text-gray-500 mt-2 text-sm">Hours: {doc.start_time} - {doc.end_time}</p>
-            <button className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
-              Book Appointment
-            </button>
+            <div className="flex items-center mb-4">
+              {/* Simple Doctor Avatar Placeholder */}
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mr-4">
+                <svg className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd"></path>
+                </svg>
+              </div>
+              <div>
+                <p className="font-bold text-xl text-gray-900 leading-tight">Dr. {doc.name}</p>
+                <p className="text-blue-600 font-medium text-sm mt-0.5">{doc.specialization}</p>
+              </div>
+            </div>
+
+            <p className="text-gray-500 text-sm mb-4 border-t pt-4">
+              <span className="font-semibold text-gray-700">Available Hours:</span> {doc.start_time} - {doc.end_time}
+            </p>
+
+            
           </div>
         ))}
     </div>
+    
+    {/* Optional: Add a message if no doctors are found after filtering */}
+    {doctors.filter((doc) => !filter || doc.specialization === filter).length === 0 && (
+        <div className="text-center py-10 text-gray-500">
+            <p className="text-lg">No doctors found for this specialization.</p>
+            <p>Try selecting "All Specializations" to see the full list.</p>
+        </div>
+    )}
   </div>
 )}
 
