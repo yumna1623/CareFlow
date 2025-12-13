@@ -1,12 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 
-/**
- * PatientBookingProfessional.jsx
- * - Ultra-professional hospital-grade UI
- * - Uses Tailwind utility classes
- * - Keeps your API endpoints & logic intact
- */
 
 const API = "http://localhost:5000/api";
 
@@ -51,7 +45,6 @@ const TextInput = ({ label, ...props }) => (
     />
   </label>
 );
-
 const Select = ({ label, children, ...props }) => (
   <label className="block">
     <span className="text-xs text-gray-600 font-medium mb-1 inline-block">{label}</span>
@@ -409,7 +402,6 @@ export default function PatientBookingProfessional() {
           <aside className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm h-full">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Find a Specialist</h3>
-              <button onClick={() => setView("doctors")} className="text-sm text-blue-600 hover:underline">Open directory</button>
             </div>
 
             <div className="mb-4">
